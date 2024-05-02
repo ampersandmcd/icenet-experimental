@@ -1,0 +1,6 @@
+__pycache__/
+network_datasets/
+processed/
+wandb/
+*.png
+*.pth
