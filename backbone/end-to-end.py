@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule_with_warmup, get_piecewise_constant_schedule
 from utils import IceNetDataSetPyTorch
 from datetime import datetime
+import numpy as np
 
 
 @dataclass
@@ -44,7 +45,7 @@ class TrainingConfig:
     overwrite_output_dir = False  # overwrite the old model when re-running the notebook
     seed = 0
     num_train_timesteps = 50  # this is small but makes inference fast, try increasing later
-    use_mask = False
+    use_mask = True
     dataset_config = "dataset_config.single_day.json"
     cross_attention_dim = 512
     rec_factor = 1
@@ -98,6 +99,9 @@ def evaluate(config, epoch, unet, condition_ae, ice_ae, scheduler, train_dl, acc
             # add previous ice state since network is trained to predict residual
             outputs = outputs + previous_ice
 
+            if config.use_mask:
+                outputs = outputs * torch.where(sw > 0.0, 1.0, 0.0)
+
             # save to list of samples
             noises.append(noise)
             samples.append(outputs)
@@ -117,7 +121,8 @@ def evaluate(config, epoch, unet, condition_ae, ice_ae, scheduler, train_dl, acc
         ax[i][2].set_title(f"Forecast")
         ax[i][3].imshow(mat_true)
         ax[i][3].set_title(f"Truth")
-        ax[i][4].imshow(mat_true - mat_out, cmap="bwr")
+        max_diff = np.amax(np.abs(mat_true - mat_out))  # to centre colourbar on zero
+        ax[i][4].imshow(mat_true - mat_out, cmap="bwr", vmin=-max_diff, vmax=max_diff)
         ax[i][4].set_title(f"Truth - Forecast")
     plt.tight_layout()
 
@@ -259,7 +264,10 @@ def train():
                     denoising_loss = F.mse_loss(noise_pred, noise)
 
                     # compute reconstruction loss from encoding-latent-decoding process on ice
-                    reconstruction_loss = F.mse_loss(targets, reconstructed_targets)
+                    if config.use_mask:
+                        reconstruction_loss = torch.mean(sw * (targets - reconstructed_targets) ** 2)
+                    else:
+                        reconstruction_loss = F.mse_loss(targets, reconstructed_targets)
 
                     # sum and backprop
                     loss = denoising_loss + config.rec_factor * reconstruction_loss
