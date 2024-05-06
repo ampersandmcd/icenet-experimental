@@ -13,12 +13,12 @@
         "sin_1"
     ],
     "counts": {
-        "train": 2,
-        "val": 2,
-        "test": 2
+        "train": 305,
+        "val": 30,
+        "test": 31
     },
     "dtype": "float32",
-    "loader_config": "/data/hpcdata/users/anddon76/icenet/icenet-experimental/loader.single_day.json",
+    "loader_config": "/data/hpcdata/users/anddon76/icenet/icenet-experimental/loader.single_year.json",
     "missing_dates": [
         "1979_02_05",
         "1979_02_25",
