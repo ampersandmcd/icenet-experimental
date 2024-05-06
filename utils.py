@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, '../icenet')  # import local IceNet rather than pip IceNet
 from icenet.data.dataset import IceNetDataSet
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
