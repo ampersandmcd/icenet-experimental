@@ -75,8 +75,7 @@ class IterableIceNetDataSetPyTorch(IterableDataset):
             self._processed = True
             mode_to_filenames = {"train": self._ds.train_fns, "val": self._ds.val_fns, "test": self._ds.test_fns}
             filenames = mode_to_filenames[self._mode]
-            datapipe = FileOpener(filenames, mode="b")
-            self._tfrecord_loader_datapipe = iter(datapipe.load_from_tfrecord())
+            self._datapipe = FileOpener(filenames, mode="b", length=len(filenames))
 
     def __len__(self):
         return self._ds._counts[self._mode]
@@ -85,26 +84,29 @@ class IterableIceNetDataSetPyTorch(IterableDataset):
         return self
     
     def __next__(self):
-        if self._processed:
-            for sample in self._tfrecord_loader_datapipe:
-                x, y, sw = sample["x"].numpy(), sample["y"].numpy(), sample["sample_weights"].numpy()
-                x = x.reshape(self._ds.shape + (-1,))
-                y = y.reshape(self._ds.shape + (-1,))
-                sw = sw.reshape(self._ds.shape + (-1,))
+        if self._i < len(self):
+            self._i += 1
+            if self._processed:
+                for sample in self._datapipe.load_from_tfrecord():
+                    x, y, sw = sample["x"].numpy(), sample["y"].numpy(), sample["sample_weights"].numpy()
+                    x = x.reshape(self._ds.shape + (-1,))
+                    y = y.reshape(self._ds.shape + (-1,))
+                    sw = sw.reshape(self._ds.shape + (-1,))
+                    x, y, sw = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(sw)
+                    x = x.permute(2, 0, 1)  # put channel to first dimension for pytorch
+                    y = y.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
+                    sw = sw.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
+                    return x, y, sw
+            else:
+                x, y, sw = self._dl.generate_sample(date=pd.Timestamp(self._dates[self._i].replace('_', '-')),
+                                            parallel=False)
                 x, y, sw = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(sw)
                 x = x.permute(2, 0, 1)  # put channel to first dimension for pytorch
                 y = y.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
                 sw = sw.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
                 return x, y, sw
         else:
-            x, y, sw = self._dl.generate_sample(date=pd.Timestamp(self._dates[self._i].replace('_', '-')),
-                                        parallel=False)
-            self._i = (self._i + 1) % len(self)
-            x, y, sw = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(sw)
-            x = x.permute(2, 0, 1)  # put channel to first dimension for pytorch
-            y = y.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
-            sw = sw.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
-            return x, y, sw
+           raise StopIteration()
 
     def get_data_loader(self):
         return self._ds.get_data_loader()

@@ -6,6 +6,7 @@ from icenet.data.processors.meta import IceNetMetaPreProcessor
 from icenet.data.processors.osi import IceNetOSIPreProcessor
 from icenet.data.loaders import IceNetDataLoaderFactory
 from utils import IterableIceNetDataSetPyTorch
+import torch
 
 if "datasets.ipynb" in os.listdir():
     os.chdir("../")
@@ -15,8 +16,8 @@ implementation = "dask"
 dataset_config = "dataset_config.exp23_south.json"
 lag = 1
 
-ds = IterableIceNetDataSetPyTorch(dataset_config, "val", batch_size=4, shuffling=False)
-
+ds = IterableIceNetDataSetPyTorch(dataset_config, "test", batch_size=4, shuffling=False)
+# dl = torch.utils.data.DataLoader(ds, batch_size=4, shuffle=False)
 # x, y, sw = next(iter(ds))
 # print(x)
 
