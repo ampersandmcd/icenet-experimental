@@ -139,34 +139,35 @@ class LitDiffusion(pl.LightningModule):
         if self.forecast_residuals:
             y = y - x
 
-        # code for multi-batch sampling
-        # samples = []
-        # for i in range(self.num_samples):  # for each condition in batch, generate multiple samples
-
-        #     noisy_y = torch.randn(x.shape[0], self.out_channels,
-        #                           self.resolution, self.resolution).to(self.device)
-
-        #     for t in tqdm(self.noise_scheduler.timesteps):
-        #         with torch.no_grad():
-        #             residual = self.forward(noisy_y, t, x)
-        #         noisy_y = self.noise_scheduler.step(residual, t, noisy_y).prev_sample
-        #     samples.append(noisy_y)
-        # samples = torch.stack(samples)  # shape (num_samples, batch_size, timesteps, y, x)
-
-        # code for single-batch sampling
-        # stack num_samples together with batches for faster processing
         bs = x.shape[0]
-        noisy_y = torch.randn(self.num_samples * bs, self.out_channels,
-                              self.resolution, self.resolution).to(self.device)
-        x = torch.vstack([x]*self.num_samples)
+        if self.num_samples * bs > 32:
+            # do batches one at a time, otherwise likely won't fit on GPU
+            samples = []
+            for i in range(self.num_samples):  # for each condition in batch, generate multiple samples
 
-        for t in tqdm(self.noise_scheduler.timesteps):
-            with torch.no_grad():
-                residual = self.forward(noisy_y, t, x)
-            noisy_y = self.noise_scheduler.step(residual, t, noisy_y).prev_sample
+                noisy_y = torch.randn(x.shape[0], self.out_channels,
+                                      self.resolution, self.resolution).to(self.device)
 
-        # unstack num_samples from batches and take mean/std
-        samples = noisy_y.reshape(self.num_samples, bs, self.out_channels, self.resolution, self.resolution)
+                for t in tqdm(self.noise_scheduler.timesteps):
+                    with torch.no_grad():
+                        residual = self.forward(noisy_y, t, x)
+                    noisy_y = self.noise_scheduler.step(residual, t, noisy_y).prev_sample
+                samples.append(noisy_y)
+            samples = torch.stack(samples)  # shape (num_samples, batch_size, timesteps, y, x)
+        else:
+            # stack num_samples together with batches for faster processing
+            noisy_y = torch.randn(self.num_samples * bs, self.out_channels,
+                                self.resolution, self.resolution).to(self.device)
+            x = torch.vstack([x]*self.num_samples)
+
+            for t in tqdm(self.noise_scheduler.timesteps):
+                with torch.no_grad():
+                    residual = self.forward(noisy_y, t, x)
+                noisy_y = self.noise_scheduler.step(residual, t, noisy_y).prev_sample
+
+            # unstack num_samples from batches and take mean/std
+            samples = noisy_y.reshape(self.num_samples, bs, self.out_channels, self.resolution, self.resolution)
+        
         means = samples.mean(dim=0)  # take ensemble mean across num_samples dimension
         stds = samples.std(dim=0)  # take ensemble std across num_samples dimension
 
