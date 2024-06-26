@@ -10,7 +10,7 @@
         "test": 31
     },
     "dtype": "float32",
-    "loader_config": "/data/hpcdata/users/anddon76/icenet/icenet-experimental/loader.single_year.json",
+    "loader_config": "/data/hpcdata/users/anddon76/icenet/icenet-experimental/loader.single_year_ice_only_lag_one.json",
     "missing_dates": [
         "1979_02_05",
         "1979_02_25",
@@ -1230,7 +1230,7 @@
         432
     ],
     "south": true,
-    "dataset_path": "./network_datasets/single_year",
+    "dataset_path": "./network_datasets/single_year_ice_only_lag_one",
     "generate_workers": 1,
     "loss_weight_days": true,
     "output_batch_size": 1,

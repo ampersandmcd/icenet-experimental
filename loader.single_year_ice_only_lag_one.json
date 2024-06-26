@@ -394,7 +394,7 @@
             "meta": [],
             "var_files": {
                 "siconca": [
-                    "./processed/single_year/osisaf/south/siconca/siconca_abs.nc"
+                    "./processed/single_year_ice_only_lag_one/osisaf/south/siconca/siconca_abs.nc"
                 ]
             }
         }
