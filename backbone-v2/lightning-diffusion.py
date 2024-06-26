@@ -44,7 +44,7 @@ class LitDiffusion(pl.LightningModule):
     """
     def __init__(self,
                  resolution=432,
-                 in_channels=2,
+                 in_channels=3,
                  out_channels=1,
                  block_out_channels=(32, 32, 64),
                  forecast_residuals=False,
@@ -127,7 +127,7 @@ class LitDiffusion(pl.LightningModule):
         pred = self.forward(noisy_y, timesteps, x)
         loss = F.mse_loss(pred, noise)
 
-        self.log("train_loss", loss)
+        self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -168,11 +168,13 @@ class LitDiffusion(pl.LightningModule):
             # unstack num_samples from batches and take mean/std
             samples = noisy_y.reshape(self.num_samples, bs, self.out_channels, self.resolution, self.resolution)
         
+        samples = samples.clip(0, 1)
         means = samples.mean(dim=0)  # take ensemble mean across num_samples dimension
         stds = samples.std(dim=0)  # take ensemble std across num_samples dimension
+        diffs = y - means
 
         # messy plotting code
-        nrows, ncols = bs, self.num_samples + 3
+        nrows, ncols = bs, self.num_samples + 4
         fig, ax = plt.subplots(nrows, ncols, figsize=(5*ncols, 5*nrows))
         for i in range(nrows):
             for j in range(self.num_samples):
@@ -184,10 +186,15 @@ class LitDiffusion(pl.LightningModule):
             ax[i][self.num_samples + 1].set_title(f"Std for Condition {i}")
             ax[i][self.num_samples + 2].imshow(y[i].squeeze().cpu())
             ax[i][self.num_samples + 2].set_title(f"Truth for Condition {i}")
+            ax[i][self.num_samples + 3].imshow(diffs[i].squeeze().cpu())
+            ax[i][self.num_samples + 3].set_title(f"(Truth - Mean) for Condition {i}")
         plt.tight_layout()
-        self.logger.log({"Sample": plt})
-                    
-        self.val_metrics.update(noisy_y, y)
+        self.logger.experiment.log({"Sample": plt})
+
+        # need to have a think on how to compute metrics across sample/mean
+        val_mse = F.mse_loss(means, y)
+        self.log("val_mse", val_mse, prog_bar=True)
+        # self.val_metrics.update(noisy_y, y)
     
     def on_validation_epoch_start(self):
         self.noise_scheduler.set_timesteps(self.num_inference_timesteps)
@@ -342,7 +349,7 @@ if __name__ == '__main__':
                         help="Choice of model architecture", required=False)
     
     # model configurations applicable to both UNet and GAN
-    parser.add_argument("--dataloader_config", default="dataset_config.single_year.json", type=str,
+    parser.add_argument("--dataloader_config", default="dataset_config.single_year_ice_only_lag_two.json", type=str,
                         help="Filename of dataloader_config.json file")
     parser.add_argument("--learning_rate", default=1e-3, type=float, help="Learning rate")
     parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
@@ -357,7 +364,7 @@ if __name__ == '__main__':
     # logging configurations applicable to both UNet and GAN
     parser.add_argument("--log_every_n_steps", default=10, type=int, help="How often to log during training")
     parser.add_argument("--max_epochs", default=100, type=int, help="Number of epochs to train")
-    parser.add_argument("--num_sanity_val_steps", default=1, type=int, 
+    parser.add_argument("--num_sanity_val_steps", default=0, type=int, 
                         help="Number of batches to sanity check before training")
     parser.add_argument("--limit_train_batches", default=1.0, type=float, help="Proportion of training dataset to use")
     parser.add_argument("--limit_val_batches", default=1.0, type=float, help="Proportion of validation dataset to use")
