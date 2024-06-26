@@ -1,7 +1,7 @@
 {
     "sources": {
         "osisaf": {
-            "name": "single_year",
+            "name": "single_year_ice_only_lag_one",
             "implementation": "IceNetOSIPreProcessor",
             "anom": [],
             "abs": [

@@ -1,5 +1,5 @@
 {
-    "identifier": "single_year",
+    "identifier": "single_year_ice_only_lag_one",
     "implementation": "DaskMultiWorkerLoader",
     "channels": [
         "siconca_abs_1"
