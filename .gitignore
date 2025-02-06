@@ -4,3 +4,9 @@ processed/
 wandb/
 *.png
 *.pth
+*.ckpt
+*.mp4
+*.npy
+*.txt
+*.out
+*.nc

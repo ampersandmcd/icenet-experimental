@@ -7,6 +7,8 @@ import torch
 from torchmetrics import Metric
 import logging
 from torchdata.datapipes.iter import FileOpener
+import numpy as np
+import scipy.stats as stats
 
 
 class IceNetDataSetPyTorch(Dataset):
@@ -34,12 +36,12 @@ class IceNetDataSetPyTorch(Dataset):
     
     def __getitem__(self, idx):
         x, y, sw = self._dl.generate_sample(date=pd.Timestamp(self._dates[idx].replace('_', '-')),
-                                        parallel=False)
+                                            parallel=False)
         x, y, sw = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(sw)
         x = x.permute(2, 0, 1)  # put channel to first dimension for pytorch
         y = y.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
         sw = sw.squeeze(-1).permute(2, 0, 1)  # collapse repeated dimension and put channel first
-        return x, y, sw
+        return x, y, sw, self._dates[idx].replace('_', '-')
 
     def get_data_loader(self):
         return self._ds.get_data_loader()
@@ -137,18 +139,21 @@ class BinaryAccuracy(Metric):
         super().__init__()
         self.leadtimes_to_evaluate = leadtimes_to_evaluate
         self.add_state("correct", default=torch.tensor(0.), dist_reduce_fx="sum")
-        self.add_state("possible", default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state("pixels", default=torch.tensor(0.), dist_reduce_fx="sum")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor, sample_weight: torch.Tensor):
-        # preds and target are shape (b, h, w, t)
+        # preds and target are shape (b, t, h, w)
         # anything greater than 0.15 concentration is ice
-        bin_preds = torch.where(preds[:, :, :, self.leadtimes_to_evaluate] > 0.15, 1, 0)
-        bin_target = torch.where(target[:, :, :, self.leadtimes_to_evaluate] > 0.15, 1, 0)
-        self.correct += torch.sum(bin_preds == bin_target)
-        self.possible += torch.sum(torch.where(sample_weight[:, :, :, self.leadtimes_to_evaluate] > 0, 1, 0))  # binary mask
+        preds = preds[:, self.leadtimes_to_evaluate, :, :]
+        target = target[:, self.leadtimes_to_evaluate, :, :]
+        mask = torch.where(sample_weight[:, self.leadtimes_to_evaluate, :, :] > 0, 1, 0)
+        bin_preds = torch.where(preds > 0.15, 1, 0)
+        bin_target = torch.where(target > 0.15, 1, 0)
+        self.correct += torch.sum(torch.logical_and(bin_preds == bin_target, mask))
+        self.pixels += torch.sum(mask)  # binary mask
 
     def compute(self):
-        return self.correct / self.possible
+        return self.correct / self.pixels
 
 
 class SIEError(Metric):
@@ -175,13 +180,17 @@ class SIEError(Metric):
         self.add_state("forecasts", default=torch.tensor(0.), dist_reduce_fx="sum")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor, sample_weight: torch.Tensor):
-        # preds and target are shape (b, h, w, t)
+        # preds and target are shape (b, t, h, w)
         # anything greater than 0.15 concentration is ice
-        bin_preds = torch.where(preds[:, :, :, self.leadtimes_to_evaluate] > 0.15, 1, 0)
-        bin_target = torch.where(target[:, :, :, self.leadtimes_to_evaluate] > 0.15, 1, 0)
+        preds = preds[:, self.leadtimes_to_evaluate, :, :]
+        target = target[:, self.leadtimes_to_evaluate, :, :]
+        mask = torch.where(sample_weight[:, self.leadtimes_to_evaluate, :, :] > 0, 1, 0)
+        bin_preds = torch.where(preds > 0.15, 1, 0)
+        bin_target = torch.where(target > 0.15, 1, 0)
         # reduce with sign over single field, reduce abs over timesteps and batches
-        self.diffs += torch.sum(torch.abs(torch.sum(bin_preds - bin_target, dim=(1, 2))))
-        b, h, w, t = target.shape
+        diffs_by_field = torch.sum((bin_preds - bin_target) * mask, dim=(2, 3))
+        self.diffs += torch.sum(torch.abs(diffs_by_field))
+        b, t, h, w = target.shape
         self.forecasts += b * t
 
     def compute(self):
@@ -212,13 +221,15 @@ class SIAError(Metric):
         self.add_state("forecasts", default=torch.tensor(0.), dist_reduce_fx="sum")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor, sample_weight: torch.Tensor):
-        # preds and target are shape (b, h, w, t)
+        # preds and target are shape (b, t, h, w)
         # sea ice area is integral of concentration
-        preds = preds[:, :, :, self.leadtimes_to_evaluate]
-        target = target[:, :, :, self.leadtimes_to_evaluate]
+        preds = preds[:, self.leadtimes_to_evaluate, :, :]
+        target = target[:, self.leadtimes_to_evaluate, :, :]
+        mask = torch.where(sample_weight[:, self.leadtimes_to_evaluate, :, :] > 0, 1, 0)
         # reduce with sign over single field, reduce abs over timesteps and batches
-        self.diffs += torch.sum(torch.abs(torch.sum(preds - target, dim=(1, 2))))
-        b, h, w, t = target.shape
+        diffs_by_field = torch.sum((preds - target) * mask, dim=(2, 3))
+        self.diffs += torch.sum(torch.abs(diffs_by_field))
+        b, t, h, w = target.shape
         self.forecasts += b * t
 
     def compute(self):
@@ -250,8 +261,11 @@ class RMSError(Metric):
 
     def update(self, preds: torch.Tensor, target: torch.Tensor, sample_weight: torch.Tensor):
         # preds and target are shape (b, h, w, t)
-        self.diffs += torch.sum((preds[:, :, :, self.leadtimes_to_evaluate] - target[:, :, :, self.leadtimes_to_evaluate])**2)
-        self.pixels += torch.sum(torch.where(sample_weight[:, :, :, self.leadtimes_to_evaluate] > 0, 1, 0))
+        preds = preds[:, self.leadtimes_to_evaluate, :, :]
+        target = target[:, self.leadtimes_to_evaluate, :, :]
+        mask = torch.where(sample_weight[:, self.leadtimes_to_evaluate, :, :] > 0, 1, 0)
+        self.diffs += torch.sum((preds - target)**2)
+        self.pixels += torch.sum(mask)
 
     def compute(self):
         return torch.sqrt(self.diffs / self.pixels)
@@ -281,9 +295,80 @@ class MAError(Metric):
         self.add_state("pixels", default=torch.tensor(0.), dist_reduce_fx="sum")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor, sample_weight: torch.Tensor):
-        # preds and target are shape (b, h, w, t)
-        self.diffs += torch.sum(torch.abs(preds[:, :, :, self.leadtimes_to_evaluate] - target[:, :, :, self.leadtimes_to_evaluate]))
-        self.pixels += torch.sum(torch.where(sample_weight[:, :, :, self.leadtimes_to_evaluate] > 0, 1, 0))
-
+        # preds and target are shape (b, t, h, w)
+        preds = preds[:, self.leadtimes_to_evaluate, :, :]
+        target = target[:, self.leadtimes_to_evaluate, :, :]
+        mask = torch.where(sample_weight[:, self.leadtimes_to_evaluate, :, :] > 0, 1, 0)
+        self.diffs += torch.sum(torch.abs(preds - target))
+        self.pixels += torch.sum(mask)
+        
     def compute(self):
         return self.diffs / self.pixels
+
+
+def compute_spectrum2d(data):
+    # from https://github.com/robbiewatt1/ClimateDiffuse/blob/main/inference/compute_spectrum.py
+    if data.ndim == 2:
+        data = data[np.newaxis, ...]
+
+    N, N_y, N_x = data.shape
+    if N_x == 2 * N_y:
+        data1 = data[:, :, :N_y]
+        data2 = data[:, :, N_y:]
+        data = np.concatenate((data1, data2), axis=0)
+    N, N_y, N_x = data.shape
+
+    # Take FFT and take amplitude
+    fourier_image = np.fft.fftn(data, axes=(1,2))
+    fourier_amplitudes = np.abs(fourier_image)**2
+
+    # Get kx and ky
+    kfreq_x = np.fft.fftfreq(N_x) * N_x
+    kfreq_y = np.fft.fftfreq(N_y) * N_y
+
+    # Combine into one wavenumber for both directions
+    kfreq2D = np.meshgrid(kfreq_x, kfreq_y)
+    knrm = np.sqrt(kfreq2D[0]**2 + kfreq2D[1]**2)
+    knrm = np.repeat(knrm[np.newaxis, ...], repeats=N, axis=0)
+
+    # Flatten arrays
+    knrm = knrm.flatten()
+    fourier_amplitudes = fourier_amplitudes.flatten()
+
+    # Get k-bins and mean amplitude within each bin
+    kbins = np.arange(0.5, N_x//2, 1)
+    Abins, _, _ = stats.binned_statistic(knrm, fourier_amplitudes,
+                                         statistic="mean",
+                                         bins=kbins)
+
+    # Multiply by volume of bin
+    Abins *= np.pi * (kbins[1:] ** 2 - kbins[:-1] ** 2)
+
+    # Get center of k-bin for plotting
+    kvals = 0.5 * (kbins[1:] + kbins[:-1])
+
+    return (kvals, Abins)
+
+
+def compute_spectrum2d_alternative(data):
+
+    npix = data.shape[0]
+
+    fourier_image = np.fft.fftn(data)
+    fourier_amplitudes = np.abs(fourier_image)**2
+
+    kfreq = np.fft.fftfreq(npix) * npix
+    kfreq2D = np.meshgrid(kfreq, kfreq)
+    knrm = np.sqrt(kfreq2D[0]**2 + kfreq2D[1]**2)
+
+    knrm = knrm.flatten()
+    fourier_amplitudes = fourier_amplitudes.flatten()
+
+    kbins = np.arange(0.5, npix//2+1, 1.)
+    kvals = 0.5 * (kbins[1:] + kbins[:-1])
+    Abins, _, _ = stats.binned_statistic(knrm, fourier_amplitudes,
+                                        statistic = "mean",
+                                        bins = kbins)
+    Abins *= np.pi * (kbins[1:]**2 - kbins[:-1]**2)
+
+    return kvals, Abins
